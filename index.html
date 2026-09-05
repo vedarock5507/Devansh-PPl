@@ -47,11 +47,24 @@ h1{font-family:'Space Grotesk', sans-serif;font-weight:700;font-size:1.4rem;lett
 .rest-msg{text-align:center;color:var(--muted);font-size:0.85rem;padding:30px 10px;line-height:1.5;}
 
 .btn-primary{background:var(--gold);color:var(--bg);border:none;padding:13px 16px;border-radius:11px;font-weight:700;font-size:0.85rem;cursor:pointer;font-family:inherit;width:100%;}
-.btn-primary:disabled{opacity:0.4;cursor:default;}
-.btn-primary:active:not(:disabled){transform:scale(0.98);}
+.btn-primary:active{transform:scale(0.98);}
 
 .reset{display:block;margin:24px auto 0;background:none;border:1px solid var(--line);color:var(--muted);font-size:0.7rem;padding:8px 14px;border-radius:9px;cursor:pointer;}
 .loading{text-align:center;color:var(--muted);padding:40px 0;font-size:0.85rem;}
+
+.day-name{cursor:pointer;}
+.day-name::after{content:' \270e';font-size:0.65rem;opacity:0.5;}
+.type-tag{cursor:pointer;}
+
+.cal-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px 17px;margin-bottom:16px;}
+.cal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.cal-title{font-weight:700;font-family:'Space Grotesk';font-size:0.95rem;}
+.cal-nav{background:none;border:1px solid var(--line);color:var(--text);width:26px;height:26px;border-radius:7px;cursor:pointer;font-size:0.8rem;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.cal-dow{text-align:center;font-size:0.6rem;color:var(--muted);padding-bottom:4px;}
+.cal-cell{aspect-ratio:1;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:0.68rem;color:var(--muted);background:var(--surface-2);}
+.cal-cell.empty{background:none;}
+.cal-cell.done{color:var(--bg);font-weight:700;}
 </style>
 </head>
 <body>
@@ -118,10 +131,20 @@ const DAYS = [
 ];
 
 const COLORS = {push:'var(--push)', pull:'var(--pull)', legs:'var(--legs)', rest:'var(--rest)'};
+const TAG_CYCLE = ['push','pull','legs','rest'];
 
 let dayIndex = 0;
 let checks = {};
 let streak = 0;
+let overrides = {};   // { '0': {label:'Custom name', tag:'legs'}, ... } — customized day slots
+let history = [];     // [{date:'2026-09-06', label:'...', tag:'push'}, ...] — for the calendar
+let calMonthOffset = 0; // 0 = current month, -1 = prev month shown, etc.
+
+function dayAt(i){
+  const base = DAYS[i];
+  const ov = overrides[i];
+  return ov ? {...base, label: ov.label ?? base.label, tag: ov.tag ?? base.tag} : base;
+}
 
 /* storage: works both inside a Claude artifact preview (window.storage)
    and on a real hosted site like GitHub Pages (localStorage fallback) */
@@ -140,9 +163,16 @@ async function loadState(){
   dayIndex = parsed?.dayIndex ?? 0;
   checks = parsed?.checks ?? {};
   streak = parsed?.streak ?? 0;
+  overrides = parsed?.overrides ?? {};
+  history = parsed?.history ?? [];
 }
 async function saveState(){
-  await storageSet('ppl:state', JSON.stringify({dayIndex, checks, streak}));
+  await storageSet('ppl:state', JSON.stringify({dayIndex, checks, streak, overrides, history}));
+}
+
+function todayISO(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
 function toggleTask(id){
@@ -151,16 +181,31 @@ function toggleTask(id){
   render();
 }
 
-function allDone(day){
-  if(day.exercises.length === 0) return true; // rest day: nothing to tick
-  return day.exercises.every(ex => checks[ex.id]);
-}
-
 async function markDayComplete(){
+  const day = dayAt(dayIndex);
   streak += 1;
+  history.push({date: todayISO(), label: day.label, tag: day.tag});
   checks = {};
   dayIndex = (dayIndex + 1) % DAYS.length;
   await saveState();
+  render();
+}
+
+function renameDay(i){
+  const day = dayAt(i);
+  const newLabel = prompt('Rename this day:', day.label);
+  if(newLabel === null) return;
+  overrides[i] = {...overrides[i], label: newLabel.trim() || day.label};
+  saveState();
+  render();
+}
+
+function cycleTag(i){
+  const day = dayAt(i);
+  const idx = TAG_CYCLE.indexOf(day.tag);
+  const nextTag = TAG_CYCLE[(idx + 1) % TAG_CYCLE.length];
+  overrides[i] = {...overrides[i], tag: nextTag};
+  saveState();
   render();
 }
 
@@ -171,9 +216,43 @@ async function resetAll(){
   render();
 }
 
+function renderCalendar(){
+  const now = new Date();
+  now.setMonth(now.getMonth() + calMonthOffset);
+  const year = now.getFullYear(), month = now.getMonth();
+  const monthName = now.toLocaleString('default',{month:'long', year:'numeric'});
+  const firstDow = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+
+  const byDate = {};
+  history.forEach(h => { byDate[h.date] = h; });
+
+  let cells = '';
+  for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
+  for(let d=1; d<=daysInMonth; d++){
+    const iso = year+'-'+String(month+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    const entry = byDate[iso];
+    const bg = entry ? `style="background:${COLORS[entry.tag]}"` : '';
+    cells += `<div class="cal-cell ${entry?'done':''}" ${bg} title="${entry?entry.label:''}">${d}</div>`;
+  }
+
+  return `
+    <div class="cal-card">
+      <div class="cal-head">
+        <button class="cal-nav" onclick="calMonthOffset--;render()">‹</button>
+        <div class="cal-title">${monthName}</div>
+        <button class="cal-nav" onclick="calMonthOffset++;render()">›</button>
+      </div>
+      <div class="cal-grid">
+        ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+        ${cells}
+      </div>
+    </div>
+  `;
+}
+
 function render(){
-  const day = DAYS[dayIndex];
-  const done = allDone(day);
+  const day = dayAt(dayIndex);
   const isRest = day.exercises.length === 0;
 
   const dots = DAYS.map((d,i)=>{
@@ -211,15 +290,17 @@ function render(){
 
     <div class="day-card">
       <div class="day-head">
-        <div class="day-name">${day.label}</div>
-        <div class="type-tag" style="background:${COLORS[day.tag]}">${day.tag.toUpperCase()}</div>
+        <div class="day-name" onclick="renameDay(${dayIndex})">${day.label}</div>
+        <div class="type-tag" style="background:${COLORS[day.tag]}" onclick="cycleTag(${dayIndex})">${day.tag.toUpperCase()}</div>
       </div>
       ${rows}
     </div>
 
-    <button class="btn-primary" ${done ? '' : 'disabled'} onclick="markDayComplete()">
-      ${isRest ? 'Mark rest day complete' : (done ? 'Mark day complete →' : 'Tick everything off first')}
+    <button class="btn-primary" onclick="markDayComplete()">
+      ${isRest ? 'Mark rest day complete →' : 'Mark day complete →'}
     </button>
+
+    ${renderCalendar()}
 
     <button class="reset" onclick="resetAll()">Reset progress</button>
   `;
