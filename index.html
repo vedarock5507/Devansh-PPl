@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15171b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>PPL Tracker</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+:root{
+  --bg:#121418; --surface:#1b1e24; --surface-2:#232730; --text:#f0ede6; --muted:#8b8780;
+  --push:#c05e37; --pull:#3f8a76; --legs:#4a7ec4; --rest:#6d7280; --gold:#e0aa4a; --line: rgba(240,237,230,0.08);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:'IBM Plex Sans', sans-serif;padding:22px 16px 60px;min-height:100vh;overscroll-behavior-y:contain;}
+.wrap{max-width:520px;margin:0 auto;}
+h1{font-family:'Space Grotesk', sans-serif;font-weight:700;font-size:1.4rem;letter-spacing:-0.01em;margin:0 0 2px;}
+.sub{color:var(--muted);font-size:0.85rem;margin:0 0 20px;}
+
+.streak-card{background:linear-gradient(145deg, var(--surface), var(--surface-2));border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;margin:0 0 18px;}
+.streak-num{font-family:'Space Grotesk';font-size:1.7rem;font-weight:700;color:var(--gold);line-height:1;}
+.streak-label{font-size:0.7rem;color:var(--muted);margin-top:2px;}
+.streak-note{font-size:0.74rem;color:var(--muted);max-width:170px;text-align:right;}
+
+.dots{display:flex;justify-content:center;gap:6px;margin-bottom:20px;}
+.dot-nav{width:7px;height:7px;border-radius:50%;background:var(--line);transition:all 0.2s;}
+.dot-nav.done{background:var(--gold);}
+.dot-nav.active{outline:2px solid var(--gold);outline-offset:2px;}
+
+.day-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px 17px;box-shadow:0 4px 20px rgba(0,0,0,0.2);margin-bottom:16px;}
+.day-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.day-name{font-weight:700;font-size:1.05rem;font-family:'Space Grotesk';}
+.type-tag{font-size:0.63rem;padding:3px 9px;border-radius:20px;font-weight:600;color:var(--bg);}
+
+.task-row{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line);}
+.task-row:last-of-type{border-bottom:none;}
+.checkbox{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--muted);flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform 0.1s;}
+.checkbox:active{transform:scale(0.85);}
+.checkbox.checked{background:var(--gold);border-color:var(--gold);}
+.checkbox.checked::after{content:'\2713';font-size:12px;color:var(--bg);font-weight:700;}
+.task-label{font-size:0.85rem;flex:1;cursor:pointer;}
+.task-label .set-info{color:var(--muted);font-size:0.72rem;display:block;margin-top:1px;}
+.task-label.done{color:var(--muted);text-decoration:line-through;}
+
+.rest-msg{text-align:center;color:var(--muted);font-size:0.85rem;padding:30px 10px;line-height:1.5;}
+
+.btn-primary{background:var(--gold);color:var(--bg);border:none;padding:13px 16px;border-radius:11px;font-weight:700;font-size:0.85rem;cursor:pointer;font-family:inherit;width:100%;}
+.btn-primary:disabled{opacity:0.4;cursor:default;}
+.btn-primary:active:not(:disabled){transform:scale(0.98);}
+
+.reset{display:block;margin:24px auto 0;background:none;border:1px solid var(--line);color:var(--muted);font-size:0.7rem;padding:8px 14px;border-radius:9px;cursor:pointer;}
+.loading{text-align:center;color:var(--muted);padding:40px 0;font-size:0.85rem;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="loading">Loading your split...</div></div>
+
+<script>
+/* His 7-slot rotating cycle: 3 lifting days, rest, 3 more lifting days, then repeats.
+   Not tied to weekdays on purpose — it advances only when a day is marked done,
+   so skipped/missed days don't throw off the split. */
+const DAYS = [
+  { label: 'Chest, Shoulder & Tricep', tag:'push', exercises: [
+    {id:'d1e1', label:'Dumbbell chest press', sets:'12.5kg x12, 15kg x12'},
+    {id:'d1e2', label:'Incline dumbbell press'},
+    {id:'d1e3', label:"Chest fly's"},
+    {id:'d1e4', label:'Lateral raises'},
+    {id:'d1e5', label:'Overhead tricep extensions'},
+    {id:'d1e6', label:'Tricep pulldowns'},
+  ]},
+  { label: 'Legs & Abs (hamstring focus)', tag:'legs', exercises: [
+    {id:'d2e1', label:'Leg press'},
+    {id:'d2e2', label:'Leg curls'},
+    {id:'d2e3', label:'Lunges'},
+    {id:'d2e4', label:'Calf raises'},
+    {id:'d2e5', label:'Cable crunches'},
+    {id:'d2e6', label:'Leg raises'},
+  ]},
+  { label: 'Back & Bicep (lat focus)', tag:'pull', exercises: [
+    {id:'d3e1', label:'Lat pulldowns', sets:'close or neutral grip x3'},
+    {id:'d3e2', label:'Dumbbell rows', sets:'x3'},
+    {id:'d3e3', label:'Seated cable rows', sets:'upper back x2'},
+    {id:'d3e4', label:'Rear delt flyes', sets:'x2'},
+    {id:'d3e5', label:'Back extensions', sets:'x3'},
+    {id:'d3e6', label:'Hammer curls', sets:'x3'},
+    {id:'d3e7', label:'Preacher curls', sets:'x2'},
+    {id:'d3e8', label:'Neck flexion', sets:'x2'},
+  ]},
+  { label: 'Rest', tag:'rest', exercises: [] },
+  { label: 'Shoulder, Chest & Tricep', tag:'push', exercises: [
+    {id:'d4e1', label:'Barbell chest press'},
+    {id:'d4e2', label:'Barbell incline chest press', sets:'x3'},
+    {id:'d4e3', label:"Chest fly's"},
+    {id:'d4e4', label:'Lateral raises', sets:'x3'},
+    {id:'d4e5', label:'Tricep pushdowns', sets:'x3'},
+    {id:'d4e6', label:'Overhead extensions', sets:'x2'},
+  ]},
+  { label: 'Legs & Abs (quad focus)', tag:'legs', exercises: [
+    {id:'d5e1', label:'Squats'},
+    {id:'d5e2', label:'Leg curls'},
+    {id:'d5e3', label:'Calf raises'},
+    {id:'d5e4', label:'Cable crunches'},
+    {id:'d5e5', label:'Leg raises'},
+  ]},
+  { label: 'Back & Bicep (upper back/traps focus)', tag:'pull', exercises: [
+    {id:'d6e1', label:'Lat pulldowns', sets:'close grip x3, go easy'},
+    {id:'d6e2', label:'Machine rows', sets:'x2, go easy'},
+    {id:'d6e3', label:'Back extensions', sets:'lower back x3'},
+    {id:'d6e4', label:'Seated upper back rows', sets:'x3'},
+    {id:'d6e5', label:'Face pulls', sets:'x3'},
+    {id:'d6e6', label:'Shrugs', sets:'x3'},
+    {id:'d6e7', label:'Bicep curls', sets:'x3'},
+    {id:'d6e8', label:'Preacher curls', sets:'x2'},
+    {id:'d6e9', label:'Neck flexion', sets:'x2'},
+  ]},
+];
+
+const COLORS = {push:'var(--push)', pull:'var(--pull)', legs:'var(--legs)', rest:'var(--rest)'};
+
+let dayIndex = 0;
+let checks = {};
+let streak = 0;
+
+/* storage: works both inside a Claude artifact preview (window.storage)
+   and on a real hosted site like GitHub Pages (localStorage fallback) */
+async function storageGet(key){
+  try{ if(window.storage){ const r = await window.storage.get(key, false); return r ? r.value : null; } }catch(e){}
+  try{ return localStorage.getItem(key); }catch(e){ return null; }
+}
+async function storageSet(key, value){
+  try{ if(window.storage){ await window.storage.set(key, value, false); return; } }catch(e){}
+  try{ localStorage.setItem(key, value); }catch(e){}
+}
+
+async function loadState(){
+  const raw = await storageGet('ppl:state');
+  const parsed = raw ? JSON.parse(raw) : null;
+  dayIndex = parsed?.dayIndex ?? 0;
+  checks = parsed?.checks ?? {};
+  streak = parsed?.streak ?? 0;
+}
+async function saveState(){
+  await storageSet('ppl:state', JSON.stringify({dayIndex, checks, streak}));
+}
+
+function toggleTask(id){
+  checks[id] = !checks[id];
+  saveState();
+  render();
+}
+
+function allDone(day){
+  if(day.exercises.length === 0) return true; // rest day: nothing to tick
+  return day.exercises.every(ex => checks[ex.id]);
+}
+
+async function markDayComplete(){
+  streak += 1;
+  checks = {};
+  dayIndex = (dayIndex + 1) % DAYS.length;
+  await saveState();
+  render();
+}
+
+async function resetAll(){
+  if(!confirm('Reset everything back to Day 1?')) return;
+  dayIndex = 0; checks = {}; streak = 0;
+  await saveState();
+  render();
+}
+
+function render(){
+  const day = DAYS[dayIndex];
+  const done = allDone(day);
+  const isRest = day.exercises.length === 0;
+
+  const dots = DAYS.map((d,i)=>{
+    const cls = ['dot-nav'];
+    if(i < dayIndex) cls.push('done');
+    if(i === dayIndex) cls.push('active');
+    return `<div class="${cls.join(' ')}"></div>`;
+  }).join('');
+
+  const rows = isRest
+    ? `<div class="rest-msg">Rest day.<br>Tap "Mark day complete" below whenever you're ready to move on to the next lifting day.</div>`
+    : day.exercises.map(ex => `
+        <div class="task-row">
+          <div class="checkbox ${checks[ex.id]?'checked':''}" onclick="toggleTask('${ex.id}')"></div>
+          <div class="task-label ${checks[ex.id]?'done':''}" onclick="toggleTask('${ex.id}')">
+            ${ex.label}
+            ${ex.sets ? `<span class="set-info">${ex.sets}</span>` : ''}
+          </div>
+        </div>
+      `).join('');
+
+  document.getElementById('app').innerHTML = `
+    <h1>PPL Tracker</h1>
+    <div class="sub">Your split, one day at a time.</div>
+
+    <div class="streak-card">
+      <div>
+        <div class="streak-num">${streak}</div>
+        <div class="streak-label">day streak</div>
+      </div>
+      <div class="streak-note">Advances only when you mark a day done — missed days won't skip your split.</div>
+    </div>
+
+    <div class="dots">${dots}</div>
+
+    <div class="day-card">
+      <div class="day-head">
+        <div class="day-name">${day.label}</div>
+        <div class="type-tag" style="background:${COLORS[day.tag]}">${day.tag.toUpperCase()}</div>
+      </div>
+      ${rows}
+    </div>
+
+    <button class="btn-primary" ${done ? '' : 'disabled'} onclick="markDayComplete()">
+      ${isRest ? 'Mark rest day complete' : (done ? 'Mark day complete →' : 'Tick everything off first')}
+    </button>
+
+    <button class="reset" onclick="resetAll()">Reset progress</button>
+  `;
+}
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
+
+(async ()=>{ await loadState(); render(); })();
+</script>
+</body>
+</html>
