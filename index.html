@@ -62,9 +62,10 @@ h1{font-family:'Space Grotesk', sans-serif;font-weight:700;font-size:1.4rem;lett
 .cal-nav{background:none;border:1px solid var(--line);color:var(--text);width:26px;height:26px;border-radius:7px;cursor:pointer;font-size:0.8rem;}
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
 .cal-dow{text-align:center;font-size:0.6rem;color:var(--muted);padding-bottom:4px;}
-.cal-cell{aspect-ratio:1;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:0.68rem;color:var(--muted);background:var(--surface-2);}
+.cal-cell{aspect-ratio:1;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:0.68rem;color:var(--muted);background:var(--surface-2);position:relative;}
 .cal-cell.empty{background:none;}
-.cal-cell.done{color:var(--bg);font-weight:700;}
+.cal-cell.done{color:var(--bg);font-weight:700;box-shadow:0 0 0 2px var(--gold);}
+.cal-cell.done::after{content:'';position:absolute;bottom:2px;right:2px;width:5px;height:5px;border-radius:50%;background:var(--gold);}
 </style>
 </head>
 <body>
@@ -133,17 +134,40 @@ const DAYS = [
 const COLORS = {push:'var(--push)', pull:'var(--pull)', legs:'var(--legs)', rest:'var(--rest)'};
 const TAG_CYCLE = ['push','pull','legs','rest'];
 
+// Generic templates loaded in when a day's type is switched via the tag pill
+const PRESETS = {
+  push: { label:'Push Workout', exercises:[
+    {id:'p1', label:'Dumbbell chest press'}, {id:'p2', label:'Incline dumbbell press'},
+    {id:'p3', label:"Chest fly's"}, {id:'p4', label:'Lateral raises'},
+    {id:'p5', label:'Overhead tricep extensions'}, {id:'p6', label:'Tricep pulldowns'},
+  ]},
+  pull: { label:'Pull Workout', exercises:[
+    {id:'pu1', label:'Lat pulldowns'}, {id:'pu2', label:'Dumbbell rows'},
+    {id:'pu3', label:'Seated cable rows'}, {id:'pu4', label:'Rear delt flyes'},
+    {id:'pu5', label:'Back extensions'}, {id:'pu6', label:'Hammer curls'},
+    {id:'pu7', label:'Preacher curls'},
+  ]},
+  legs: { label:'Legs Workout', exercises:[
+    {id:'l1', label:'Squats'}, {id:'l2', label:'Leg press'}, {id:'l3', label:'Leg curls'},
+    {id:'l4', label:'Lunges'}, {id:'l5', label:'Calf raises'}, {id:'l6', label:'Cable crunches'},
+  ]},
+  rest: { label:'Rest', exercises:[] },
+};
+
 let dayIndex = 0;
 let checks = {};
 let streak = 0;
-let overrides = {};   // { '0': {label:'Custom name', tag:'legs'}, ... } — customized day slots
+let overrides = {};   // { '0': {label, tag, exercises}, ... } — customized day slots
 let history = [];     // [{date:'2026-09-06', label:'...', tag:'push'}, ...] — for the calendar
-let calMonthOffset = 0; // 0 = current month, -1 = prev month shown, etc.
+let calMonthOffset = 0;
+let editingIndex = null; // which day slot's name is currently being edited inline
+let resetArmed = false;  // true right after first tap of the reset button
 
 function dayAt(i){
   const base = DAYS[i];
   const ov = overrides[i];
-  return ov ? {...base, label: ov.label ?? base.label, tag: ov.tag ?? base.tag} : base;
+  if(!ov) return base;
+  return { label: ov.label ?? base.label, tag: ov.tag ?? base.tag, exercises: ov.exercises ?? base.exercises };
 }
 
 /* storage: works both inside a Claude artifact preview (window.storage)
@@ -191,12 +215,25 @@ async function markDayComplete(){
   render();
 }
 
-function renameDay(i){
-  const day = dayAt(i);
-  const newLabel = prompt('Rename this day:', day.label);
-  if(newLabel === null) return;
-  overrides[i] = {...overrides[i], label: newLabel.trim() || day.label};
+function startRename(i){
+  editingIndex = i;
+  render();
+}
+
+function saveRename(i){
+  const input = document.getElementById('rename-input');
+  const newLabel = input ? input.value.trim() : '';
+  if(newLabel){
+    const base = dayAt(i);
+    overrides[i] = {...overrides[i], label: newLabel};
+  }
+  editingIndex = null;
   saveState();
+  render();
+}
+
+function cancelRename(){
+  editingIndex = null;
   render();
 }
 
@@ -204,16 +241,25 @@ function cycleTag(i){
   const day = dayAt(i);
   const idx = TAG_CYCLE.indexOf(day.tag);
   const nextTag = TAG_CYCLE[(idx + 1) % TAG_CYCLE.length];
-  overrides[i] = {...overrides[i], tag: nextTag};
+  const preset = PRESETS[nextTag];
+  // swap in that type's real exercises, but keep a custom name if one was already set
+  const keepCustomName = overrides[i]?.label && overrides[i].label !== dayAt(i).label ? overrides[i].label : null;
+  overrides[i] = { label: keepCustomName ?? preset.label, tag: nextTag, exercises: preset.exercises };
   saveState();
   render();
 }
 
-async function resetAll(){
-  if(!confirm('Reset everything back to Day 1?')) return;
-  dayIndex = 0; checks = {}; streak = 0;
-  await saveState();
-  render();
+function armReset(){
+  if(resetArmed){
+    dayIndex = 0; checks = {}; streak = 0; overrides = {}; history = [];
+    resetArmed = false;
+    saveState();
+    render();
+  } else {
+    resetArmed = true;
+    render();
+    setTimeout(()=>{ if(resetArmed){ resetArmed = false; render(); } }, 3000);
+  }
 }
 
 function renderCalendar(){
@@ -290,7 +336,14 @@ function render(){
 
     <div class="day-card">
       <div class="day-head">
-        <div class="day-name" onclick="renameDay(${dayIndex})">${day.label}</div>
+        ${editingIndex === dayIndex
+          ? `<div style="display:flex;gap:6px;flex:1;">
+               <input id="rename-input" value="${day.label}" style="flex:1;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 9px;font-size:0.95rem;font-family:inherit;">
+               <button class="cal-nav" onclick="saveRename(${dayIndex})" style="width:auto;padding:0 10px;">✓</button>
+               <button class="cal-nav" onclick="cancelRename()" style="width:auto;padding:0 10px;">✕</button>
+             </div>`
+          : `<div class="day-name" onclick="startRename(${dayIndex})">${day.label}</div>`
+        }
         <div class="type-tag" style="background:${COLORS[day.tag]}" onclick="cycleTag(${dayIndex})">${day.tag.toUpperCase()}</div>
       </div>
       ${rows}
@@ -302,7 +355,7 @@ function render(){
 
     ${renderCalendar()}
 
-    <button class="reset" onclick="resetAll()">Reset progress</button>
+    <button class="reset" onclick="armReset()">${resetArmed ? 'Tap again to confirm reset' : 'Reset progress'}</button>
   `;
 }
 
